@@ -1,72 +1,234 @@
-sap.ui.requireSync("u4a/ui/core/CustomData");
-
-PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", writeToDom: true }));
-
-(function () {
-    "use strict";
-
-    /********************************************************************
-     * SHORTCUT LIST
-     ********************************************************************/
-    let aShortcutList = [
-
-        /*********************************************
-         * TEST APP - YLCY_TEST2071
-         *********************************************/
-        // { key: "F4", ui: getUiId(INPUT3), evtnm: "submit" },
-        // { key: "F3", ui: getUiId(INPUT3), evtnm: "valueHelpRequest" },
-
-        // { key: "F8", ui: getUiId(INPUT3), evtnm: "valueHelpRequest" },
-        // { key: "F8", ui: getUiId(BUTTON20), evtnm: "press" },
-        // { key: "F8", ui: getUiId(BUTTON19), evtnm: "press" },
-
-        // { key: "F8", ui: getUiId(BUTTON18), evtnm: "press" },
-        
-        { key: "F8", ui: getUiId(BUTTON3), evtnm: "press" },
-
-    ];
-
+/**
+  * @class ShortcutManager
+  * @classdesc
+  * SAPUI5 환경에서 전역 단축키를 제어하는 매니저 클래스.
+  * 
+  * - keydown 이벤트를 특정 DOM 요소(document, body, div 등)에 바인딩 가능
+  * - UI5 컨트롤 ID 기반 단축키 매핑
+  * - display:none / visibility:hidden / 영역 내부 체크
+  * - 최종 visible UI만 fireEvent
+  */
+export class ShortcutManager {
 
     /**
-     * @function getUiId
-     * @description
-     * UI5 컨트롤 인스턴스에서 ID를 안전하게 추출하여 반환한다.
+     * @constructor
+     * @param {Array<Object>} [aShortcutList=[]]
+     *   단축키 매핑 정보 배열  
+     *   예: `{ key: "F8", ui: "BUTTON3", evtnm: "press" }`
      *
-     * @param {sap.ui.core.Control} oUI
-     *   ID를 가져올 UI 인스턴스
-     *
-     * @returns {string}
-     *   UI ID 문자열. 유효하지 않으면 빈 문자열 반환.
+     * @param {HTMLElement | Document} [oKeyTarget=document]
+     *   keydown 이벤트를 바인딩할 대상 DOM 요소  
+     *   - document  
+     *   - document.body  
+     *   - div 등 HTMLElement 모두 가능
      */
-    function getUiId(oUI) {
+    constructor(aShortcutList = [], oKeyTarget = document) {
 
-        if (!oUI) return "";
+        // 단축키 대상 목록 저장
+        this._aShortcutList = aShortcutList;
 
-        if (typeof oUI.getId !== "function") return "";
+        /** @private 이벤트 타겟 */
+        this._oKeyTarget = oKeyTarget instanceof HTMLElement || oKeyTarget === document
+            ? oKeyTarget
+            : document;
 
-        return oUI.getId() || "";
+        /**
+          * @private
+          * 이벤트 핸들러 콜백들을 초기화 (bind(this)).
+          * 내부 인스턴스 변수에 저장.          
+          */
+        this._initEventHandlers();
+
+        /** @private destroy 여부 플래그 */
+        this._destroyed = false;
+
+        // 키보드 이벤트 시작 여부 플래그
+        this._started = false;
+
     }
 
 
     /**
-     * @function buildKeyString
+     * @private
+     * @method _initEventHandlers
      * @description
-     * keydown 이벤트의 `event` 객체로부터 사용자가 입력한 단축키 조합을
-     * `"Ctrl+Shift+S"` 와 같은 문자열 형태로 생성하는 함수.
+     * 내부 이벤트 핸들러(예: `_onKeyDown`)를 `this`로 bind하여  
+     * 인스턴스 변수에 저장하는 초기화 함수.
+     * DOM 이벤트 등록 전, 콜백 준비 단계 역할만 수행한다.
+     */
+    _initEventHandlers() {
+
+        /** @private 바인딩된 이벤트 핸들러 */
+        this._onKeyDown = this._onKeyDown.bind(this);
+
+    }
+
+    /* =====================================================================
+     * PUBLIC API
+     * ===================================================================== */
+
+    /**
+     * @method setShortcutList
+     * @description
+     * Shortcut 매핑 리스트를 교체한다.
      *
-     * 동작 방식:
-     * - Ctrl / Shift / Alt 키가 눌렸는지 확인 후 문자열에 포함
-     * - 일반 키(e.key)는 한 글자일 경우 대문자로 변환하여 추가
-     * - 모든 키 정보를 `"+"` 로 이어붙여 최종 단축키 문자열 생성
+     * @param {Array<Object>} aList
+     *   새로운 단축키 매핑 목록
+     */
+    setShortcutList(aList = []) {
+        this._aShortcutList = Array.isArray(aList) ? aList : [];
+    }
+
+    getShortcutList(){
+        return this._aShortcutList || [];
+    }
+
+    /**
+     * @method start
+     * @description
+     * keydown 이벤트 리스너 활성화
+     */
+    start() {
+
+        if(this._started) return;
+
+        if (this._destroyed) return;        
+
+        this._addEvents();
+
+        this._started = true;
+    }
+
+    /**
+     * @method stop
+     * @description
+     * keydown 이벤트 리스너를 비활성화한다.
      *
-     * @param {KeyboardEvent} event
-     *   keydown 이벤트 객체. 사용자가 누른 키 정보가 포함된 표준 KeyboardEvent.
+     * - destroy()와 달리 인스턴스는 보존됨
+     * - start() 를 다시 호출하면 이벤트가 재등록됨
+     */
+    stop() {
+
+        // 이미 중단된 상태면 무시
+        if (!this._started) return;
+
+        // 파괴된 인스턴스면 중단 불가
+        if (this._destroyed) return;
+
+        this._removeEvents();
+
+        this._started = false;
+    }
+    
+    /**
+     * @method destroy
+     * @description
+     * ShortcutManager 인스턴스를 완전히 파괴한다.
+     *
+     * 내부 처리:
+     * - keydown 이벤트 핸들러 제거
+     * - 내부 변수 모두 null/빈값 초기화
+     * - destroy 플래그 적용
+     */
+    destroy() {
+
+        if (this._destroyed) return;
+
+        // 이벤트 리스너 제거
+        this._removeEvents();
+
+        // 내부 변수 초기화
+        this._aShortcutList = [];
+        this._oKeyTarget = null;
+        this._onKeyDown = null;
+        this._destroyed = true;
+
+    }
+    
+    isDestroyed(){
+        return this._destroyed;
+    }
+
+    /* =====================================================================
+     * PRIVATE UTIL METHODS
+     * ===================================================================== */
+
+    /**
+     * @private
+     * @method _addEvents
+     * @description
+     * ShortcutManager 에서 keydown 이벤트를 감지하기 위해  
+     * `_oKeyTarget` 대상에 keydown 이벤트를 등록한다.
+     *
+     * start() 호출 시에만 실행되며,
+     * stop() 또는 destroy() 호출 시 제거된다.
+     */
+    _addEvents(){
+
+        if (!this._oKeyTarget) {
+            return;
+        }
+
+        this._oKeyTarget.addEventListener("keydown", this._onKeyDown, true);
+
+    }
+
+    /**
+     * @private
+     * @method _removeEvents
+     * @description
+     * `_addEvents()` 로 등록된 keydown 이벤트 리스너를 제거한다.
+     *
+     * stop() 또는 destroy() 호출 시 실행된다.
+     */
+    _removeEvents() {
+
+        if (!this._oKeyTarget) {
+            return;
+        }
+
+        this._oKeyTarget.removeEventListener("keydown", this._onKeyDown, true);
+
+    }
+
+    /**
+     * @static
+     * @method _getUiId
+     * @description
+     * UI5 컨트롤 인스턴스에서 ID를 안전하게 추출한다.
+     *
+     * - getId() 가 존재하지 않으면 빈 문자열 반환  
+     * - 정상적인 UI5 인스턴스일 경우 ID 문자열 반환  
+     *
+     * @param {sap.ui.core.Control} oUI
+     *   UI5 컨트롤 인스턴스
      *
      * @returns {string}
-     *   예: `"Ctrl+S"`, `"Ctrl+Shift+A"`, `"Alt+F4"`  
-     *   조합된 단축키 문자열을 반환
+     *   UI5 ID 문자열
      */
-    function buildKeyString(event) {
+    static _getUiId(oUI) {
+        if (!oUI) return "";
+        if (typeof oUI.getId !== "function") return "";
+        return oUI.getId() || "";
+    }
+
+    /**
+     * @private
+     * @method _buildKeyString
+     * @description
+     * keydown 이벤트 객체에서 단축키 문자열을 생성한다.
+     *
+     * - Ctrl / Shift / Alt 조합 포함  
+     * - 문자 키는 대문자로 변환  
+     * - 예: "Ctrl+S", "Shift+Alt+X", "F8"  
+     *
+     * @param {KeyboardEvent} event
+     *   keydown 이벤트 객체
+     *
+     * @returns {string}
+     *   단축키 문자열
+     */
+    _buildKeyString(event) {
         const parts = [];
 
         if (event.ctrlKey) parts.push("Ctrl");
@@ -83,26 +245,28 @@ PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", wr
     }
 
     /**
-     * @function collectUiDomRefs
+     * @private
+     * @method _collectUiDomRefs
      * @description
-     * UI5 컨트롤 ID 목록을 기반으로 각 UI 인스턴스와 DOM 요소(DomRef)를 수집한다.
+     * 단축키 매핑 목록(aMatch)에서  
+     * UI5 컨트롤 인스턴스와 DOM 요소(DomRef)를 함께 수집한다.
      *
-     * @param {Array<{ui: string}>} matchList
-     *   UI5 컨트롤 ID 정보 목록
+     * - ui: UI5 ID 문자열  
+     * - sap.ui.getCore().byId() 로 컨트롤 조회  
+     * - getDomRef() 로 실제 DOM 요소 추출  
+     * - UI 또는 DOM 이 없으면 해당 항목은 제외  
      *
-     * @returns {Array<{
-     *   shot: Object,
-     *   ui: sap.ui.core.Control,
-     *   dom: HTMLElement
-     * }>}
-     *   UI 인스턴스 및 DOM 정보 리스트
+     * @param {Array<Object>} aMatch
+     *   단축키 매핑 정보 목록
+     *
+     * @returns {Array<Object>}
+     *   `{ shot, ui, dom }` 구조의 유효한 매핑 리스트
      */
-
-    function collectUiDomRefs(matchList) {
+    _collectUiDomRefs(aMatch) {
 
         const result = [];
 
-        for (const item of matchList) {
+        for (const item of aMatch) {
 
             const uiId = item?.ui || "";
             const uiInstance = sap.ui.getCore().byId(uiId);
@@ -121,34 +285,27 @@ PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", wr
         return result;
     }
 
-
     /**
-     * @function isVisible
+     * @private
+     * @method _isVisible
      * @description
-     * 지정된 `targetDom` 요소가 특정 기준 영역 `scopeRootDom` 내부에서
-     * 실제로 화면에 **보이는 상태인지 판단**하는 함수.
+     * 전달된 DOM 요소가 실제 화면에 표시되고 있는지 검사한다.
      *
-     * 동작 방식:
-     * - `targetDom` 자체가 숨김(display:none / visibility:hidden)인지 검사
-     * - 이후 부모 요소를 순차적으로 올라가며(`targetDom` → `scopeRootDom`)
-     *   하나라도 숨김 상태이면 `false` 반환
-     * - 모든 검사를 통과하면 `true` 반환
+     * 검사 항목:
+     * - 본인 또는 상위 요소 중 display:none 이 있는 경우 → false
+     * - 본인 또는 상위 요소 중 visibility:hidden 이 있는 경우 → false
      *
-     * 즉, **targetDom이 scopeRootDom 내부에서 시각적으로 노출 가능한 상태인지 확인**하는 유틸리티.
+     * @param {HTMLElement} targetDom  
+     *   가시성을 점검할 실제 DOM 요소
      *
-     * @param {HTMLElement} targetDom
-     *   가시성(Visible) 여부를 확인할 DOM 요소
+     * @param {HTMLElement} scopeRootDom  
+     *   검사 종료 기준점 DOM  
+     *   이 DOM에 도달하면 더 상위는 검사하지 않음
      *
-     * @param {HTMLElement} scopeRootDom
-     *   검사 범위를 제한하는 기준 루트 DOM 요소  
-     *   `targetDom`부터 해당 요소에 도달할 때까지 부모 체인을 검사함
-     *
-     * @returns {boolean}
-     *   `true`  → 화면상 표시됨  
-     *   `false` → 숨겨져 있거나 상위 체인 중 일부가 숨김 처리됨
+     * @returns {boolean}  
+     *   true = 화면에 표시됨, false = 숨김 처리됨
      */
-    function isVisible(targetDom, scopeRootDom) {
-
+    _isVisible(targetDom, scopeRootDom) {
         let style = getComputedStyle(targetDom);
         if (style.display === "none" || style.visibility === "hidden") {
             return false;
@@ -156,7 +313,6 @@ PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", wr
 
         let currentParent = targetDom.parentElement;
 
-        // 부모 체인 검사
         while (currentParent && currentParent !== scopeRootDom) {
             style = getComputedStyle(currentParent);
             if (style.display === "none" || style.visibility === "hidden") {
@@ -168,21 +324,34 @@ PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", wr
         return true;
     }
 
-
-    /********************************************************************
-     * Shortcut UI 중, oAreaDom 기준으로 활성화 대상 추출
-     ********************************************************************/
-    function getVisibleShortcutUIs(aCandidates, oAreaDom) {
+    /**
+     * @private
+     * @method _getVisibleShortcutUIs
+     * @description
+     * 단축키 후보 UI 목록 중에서  
+     * 1) 현재 영역(oAreaDom)의 하위에 존재하고  
+     * 2) display:none / visibility:hidden 이 아닌  
+     * 실제 화면에 노출된(UI5 기준 visible) UI만 필터링한다.
+     *
+     * @param {Array<Object>} aCandidates  
+     *   `_collectUiDomRefs()` 로 수집된 후보 UI 목록  
+     *   구조: `{ shot, ui, dom }`
+     *
+     * @param {HTMLElement} oAreaDom  
+     *   단축키 탐색 기준 DOM (document.activeElement)
+     *
+     * @returns {Array<Object>}  
+     *   화면에 보이는 UI들만 담긴 배열
+     */
+    _getVisibleShortcutUIs(aCandidates, oAreaDom) {
 
         const visible = [];
 
         for (let o of aCandidates) {
 
-            // area 내 포함 여부 (초고속)
             if (!oAreaDom.contains(o.dom)) continue;
 
-            // visible 검사
-            if (!isVisible(o.dom, oAreaDom)) continue;
+            if (!this._isVisible(o.dom, oAreaDom)) continue;
 
             visible.push(o);
         }
@@ -190,79 +359,95 @@ PAGE1.addCustomData(new u4a.ui.core.CustomData({ key: "tabindex", value: "0", wr
         return visible;
     }
 
-
-    /********************************************************************
-     * UI fire 처리
-     ********************************************************************/
-    function fireUIs(aVisibleList) {
+    /**
+     * @private
+     * @method _fireUIs
+     * @description
+     * 단축키에 매칭되었고, 실제 화면에 보이는 UI들만  
+     * 지정된 UI5 이벤트(evtnm)를 fireEvent 로 호출한다.
+     *
+     * 이벤트 파라미터:
+     * - hotkey: 실제 눌린 단축키 문자열(Ctrl+S 등)
+     *
+     * @param {Array<Object>} aVisibleList  
+     *   `_getVisibleShortcutUIs()` 결과  
+     *   구조: `{ shot, ui, dom }`
+     */
+    _fireUIs(aVisibleList) {
 
         for (let o of aVisibleList) {
 
-            if (!o?.shot?.evtnm) {
-                continue;
-            }
+            if (!o?.shot?.evtnm) continue;
 
-            let oParams = {
+            o.ui.fireEvent(o.shot.evtnm, {
                 hotkey: o.shot.key
-            };
-
-            o.ui.fireEvent(o.shot.evtnm, oParams);
-
+            });
         }
     }
 
+    /**
+     * @private
+     * @method _getAreaDom
+     * @description
+     * 단축키 판별 시 기준이 되는 **영역 DOM**을 반환한다.
+     *
+     * 현재 방식:
+     * - document.activeElement 를 기준으로 사용
+     *
+     * 이유:
+     * - activeElement 기준으로 그 하위 DOM만 단축키 탐색 대상으로 삼음
+     * - 페이지 전환, Dialog, Popover 등 focus 기반 UI5 구조에 적합
+     *
+     * @returns {HTMLElement}
+     *   현재 focus 되어 있는 DOM 요소
+     */
+    _getAreaDom() {
+        return document.activeElement;
+    }
 
-    /********************************************************************
-     * 단축키 이벤트 함수
-     ********************************************************************/
-    function onShortCutEvent(e) {
+    /**
+     * @private
+     * @method _onKeyDown
+     * keydown 이벤트 → 단축키 매칭 → UI fireEvent
+     */
+    _onKeyDown(e) {
 
+        // 파괴된 인스턴스면 즉시 종료
+        if (this._destroyed) return;
+
+        // 반복 입력(e.repeat) 차단
         if (typeof e.repeat === "boolean" && e.repeat) {
+            console.log("키보드 꾹 누르기 금지!!");
             return;
         }
 
-        // 단축키 조합을 문자열로 받음.
-        let sKey = buildKeyString(e);
+        // 눌린 키를 단축키 문자열로 변환 (Ctrl+S 등)
+        const sKey = this._buildKeyString(e);
 
-        // 단축키 리스트 중, 단축키 조합에 맞는 것만 추출
-        let aMatch = aShortcutList.filter(o => o.key === sKey);
+        // 매핑된 단축키 찾기
+        const aMatch = this._aShortcutList.filter(o => o.key === sKey);
         if (aMatch.length === 0) return;
 
-        // 단축키 UI 찾는 기준 영역
-        let oAreaDom = document.activeElement;
+        // 단축키에 해당하는 UI를 탐색하는 기준이 되는 영역 DOM을 구한다.
+        const oAreaDom = this._getAreaDom();
 
-        // ─────────────────────────────────────
-        // (1) shortcut 대상 DOM 수집
-        // ─────────────────────────────────────
-        let aCandidates = collectUiDomRefs(aMatch);
-        if (!aCandidates.length) {
-            return;
-        }
+        // UI 인스턴스 + DOM 수집
+        const aCandidates = this._collectUiDomRefs(aMatch);
+        if (!aCandidates.length) return;
 
-        // ─────────────────────────────────────
-        // (2) visible UI만 필터링
-        // ─────────────────────────────────────
-        let aVisibleList = getVisibleShortcutUIs(aCandidates, oAreaDom);
-        if (!aVisibleList.length) {
-            return;
-        }
+        // 실제 화면에 보이는 UI만 필터링
+        const aVisibleList = this._getVisibleShortcutUIs(aCandidates, oAreaDom);
+        if (!aVisibleList.length) return;
 
-        e.preventDefault(); // ← 브라우저 기본 'find' 동작 차단
-        e.stopPropagation(); // (옵션) 다른 핸들러로 이벤트 전파 차단
-    
-        console.log(oAreaDom);
-        console.log("➡️ 단축키 실행 대상 ===>", aVisibleList);
+        console.log("단축키 대상 ---> ", aVisibleList);
 
-        // ─────────────────────────────────────
-        // (3) fire
-        // ─────────────────────────────────────
-        fireUIs(aVisibleList);
+        // 단축키에 해당하는 내용을 찾을 경우는 다른 keydown 이벤트 전파 방지
+        e.preventDefault();
+        e.stopPropagation();
 
+        // 해당 UI 이벤트 실행
+        this._fireUIs(aVisibleList);
     }
 
-    /********************************************************************
-     * KEYDOWN HANDLER
-     ********************************************************************/
-    document.addEventListener("keydown", onShortCutEvent, true);
+} // end of ShortcutManager class
 
-})();
