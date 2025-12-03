@@ -71,6 +71,8 @@
             console.log("bbb");
         };
 
+        debugger;
+        
         // [수정 포인트 2] ServerManager에게 "변수명"과 "객체"를 지정해서 전달
         // 뜻: "ServerManager야, 내가 준 객체(myLocalObject)를 스크립트 안에서는 'loU4A'라는 이름으로 쓸 거야."
         let oServerManager = new ServerManager({ 
