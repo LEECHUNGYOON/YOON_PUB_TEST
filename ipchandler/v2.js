@@ -57,10 +57,12 @@ function on(channel, handler) {
     const { __replyChannel, params } = message || {};
 
     event.reply = (data) => {
+
       // 응답 채널 없으면 중단
       if (!__replyChannel) {
         return;
       }
+      
       // 요청자에게 직접 응답
       event.sender.send(__replyChannel, data);
     };
@@ -87,3 +89,17 @@ function off(channel, handler) {
 }
 
 module.exports = { send, on, off };
+
+
+/*****************************************************
+ * 예시
+ ***************************************************** 
+ * const stop = send('save', { param: 1 }, function (event, param){
+ * 
+ *    // 여러군데에서 콜백을 받은 이후..
+ * 
+ *     stop();
+ * 
+ * });
+ * 
+ */
