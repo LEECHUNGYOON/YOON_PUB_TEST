@@ -1,15 +1,11 @@
-/**
- * [Renderer 전용] Electron Remote IPC 유틸리티
- * - 1:N 통신 지원 (Broadcast)
- * - Timeout 제거 -> 구독 해제 함수(Unsubscribe) 반환 방식 적용
- */
-
 const REMOTE = require('@electron/remote');
 const IPCMAIN = REMOTE.require('electron').ipcMain;
 const IPCRENDERER = require('electron').ipcRenderer;
 
 // 타임스탬프 중복 방지용 카운터
 let callbackId = 0;
+
+// 이벤트 핸들러를 관리하는 Map
 const handlerMap = new Map();
 
 /**
@@ -17,6 +13,7 @@ const handlerMap = new Map();
  * * @returns {Function} 리스너 제거 함수 (더 이상 응답을 받지 않을 때 호출)
  */
 function send(channel, params, callback) {
+
   // 1. 단방향 통신 (Callback 없음)
   if (typeof callback !== 'function') {
     IPCRENDERER.send(channel, { params });
